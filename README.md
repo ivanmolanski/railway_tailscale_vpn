@@ -161,18 +161,31 @@ sudo cp docker-compose.oracle.yml /opt/tailscale-stack/docker-compose.yml
 sudo tee /opt/tailscale-stack/.env <<'EOF'
 TS_AUTHKEY=tskey-auth-REPLACE_ME
 TS_HOSTNAME=oracle-ts
-CODE_SERVER_PASSWORD=REPLACE_ME
+CODE_SERVER_PASSWORD=
+# tailscale up/set flags (example: --advertise-exit-node)
 TS_EXTRA_ARGS=
+# tailscaled daemon flags (optional)
+TS_TAILSCALED_EXTRA_ARGS=
 EOF
 sudo chmod 600 /opt/tailscale-stack/.env
 ```
 
-#### 4 — Start Tailscale container and discover exit node
+#### 4 — SSH-safe handoff to containerized Tailscale, then start it
 
 ```sh
+# If this SSH session is over tailscale0, reconnect via public IP/console first.
+SSH_SRC_IP="$(echo "$SSH_CLIENT" | awk '{print $1}')"
+if [ -n "$SSH_SRC_IP" ] && ip -o route get "$SSH_SRC_IP" 2>/dev/null | grep -q ' dev tailscale0 '; then
+  echo "SSH is currently over tailscale0; reconnect via public IP/console before continuing."
+  exit 1
+fi
+
+# Stop host tailscaled so containerized tailscaled can own tailscale0 and routes.
+sudo systemctl disable --now tailscaled 2>/dev/null || true
+
 cd /opt/tailscale-stack
 sudo docker compose up -d tailscale
-sudo docker compose logs -f tailscale   # wait for "Tailscale is up"
+sudo docker compose logs -f tailscale   # wait for "Startup complete, waiting for shutdown signal"
 
 # Verify a real kernel interface exists
 sudo docker exec tailscale ip addr show tailscale0
@@ -180,37 +193,21 @@ sudo docker exec tailscale tailscale status
 sudo docker exec tailscale tailscale ip
 ```
 
-Find the current Oracle/AirVPN exit node Tailscale IP:
+Configure this Oracle node to advertise exit-node capability:
 
 ```sh
-sudo docker exec tailscale tailscale status
-# Note the IP of the node that advertises exit-node (e.g. 100.x.x.x)
-# Confirm it is approved in the Tailnet admin console.
-```
-
-Set the exit node (replace `100.x.x.x` with the discovered IP):
-
-```sh
-sudo docker exec tailscale tailscale set \
-  --exit-node=100.x.x.x \
-  --exit-node-allow-lan-access=true
+sudo docker exec tailscale tailscale set --advertise-exit-node
 
 # Persist via TS_EXTRA_ARGS in .env for restarts:
-# TS_EXTRA_ARGS=--exit-node=100.x.x.x --exit-node-allow-lan-access=true
+# TS_EXTRA_ARGS=--advertise-exit-node
 ```
 
-#### 5 — Start code-server
+Approve the exit-node advertisement in the Tailnet admin console.
 
-```sh
-cd /opt/tailscale-stack
-sudo docker compose up -d code-server
-sudo docker compose logs -f code-server
-```
-
-#### 5b — Restrict code-server port to Tailscale interface only
+#### 5 — Restrict code-server port before startup
 
 Because both containers use host networking, code-server port 8080 binds on all
-host interfaces.  Lock it down immediately after starting the stack:
+host interfaces. Install the firewall guard before starting code-server:
 
 ```sh
 # Allow only connections arriving on tailscale0
@@ -218,15 +215,26 @@ sudo iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
   || sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
 
 # Persist the rule (Ubuntu/ufw example):
-# sudo ufw deny 8080   # deny from everywhere
 # sudo ufw allow in on tailscale0 to any port 8080
+# sudo ufw deny 8080   # deny from everywhere
 ```
 
-#### 6 — Verify end-to-end traffic from inside code-server
+#### 6 — Start code-server
 
 ```sh
-sudo docker exec code-server ip addr          # must show tailscale0
-sudo docker exec code-server ip route         # must show Tailscale routes
+cd /opt/tailscale-stack
+sudo docker compose up -d code-server
+sudo docker compose logs -f code-server
+```
+
+#### 7 — Verify end-to-end traffic from inside code-server
+
+```sh
+# `code-server` shares `tailscale` netns; inspect routes from tailscale image.
+sudo docker exec tailscale ip addr show tailscale0
+sudo docker exec tailscale ip rule show
+sudo docker exec tailscale ip route show table 52
+
 sudo docker exec code-server curl -4 https://ifconfig.me
 sudo docker exec code-server curl -4 https://icanhazip.com
 sudo docker exec code-server curl -4 https://api.ipify.org
@@ -241,7 +249,7 @@ curl -4 https://ifconfig.me   # must return AirVPN egress IP
 wg show                        # must show active handshake
 ```
 
-#### 7 — Firewall audit post-Docker
+#### 8 — Firewall audit post-Docker
 
 After Docker is running, inspect and protect the existing rules:
 
@@ -263,7 +271,7 @@ sudo iptables -C DOCKER-USER -o tailscale0 -j ACCEPT 2>/dev/null \
 
 Do **not** flush or overwrite existing WireGuard rules.
 
-#### 8 — Persistence test
+#### 9 — Persistence test
 
 ```sh
 # Restart Tailscale, then restart code-server so it rejoins the recreated
