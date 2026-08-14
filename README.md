@@ -269,7 +269,7 @@ Do **not** flush or overwrite existing WireGuard rules.
 # Restart Tailscale, then restart code-server so it rejoins the recreated
 # network namespace.
 sudo docker compose restart tailscale
-sudo docker compose restart code-server
+sudo docker compose up -d --force-recreate code-server
 sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
 
 # Full reboot test (confirm SSH safety first)
