@@ -299,8 +299,9 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+TimeoutStartSec=180
 WorkingDirectory=/opt/tailscale-stack
-ExecStart=/bin/sh -c "/usr/bin/docker compose up -d tailscale && until /usr/bin/docker inspect tailscale 2>/dev/null | grep -q '\"Status\": \"healthy\"'; do sleep 2; done && /usr/bin/docker compose up -d --force-recreate code-server"
+ExecStart=/bin/sh -c "/usr/bin/docker compose up -d tailscale && until [ \"$$(/usr/bin/docker inspect --format='{{.State.Health.Status}}' tailscale 2>/dev/null)\" = healthy ]; do sleep 2; done && /usr/bin/docker compose up -d --force-recreate code-server"
 
 [Install]
 WantedBy=multi-user.target
