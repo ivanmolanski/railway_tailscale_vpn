@@ -85,7 +85,7 @@ real tailscale0 kernel interface (100.x.x.x)
     ↓
 code-server (network_mode: "service:tailscale" — shares Tailscale namespace)
     ↓
-Tailscale exit node (Oracle/AirVPN identity)
+Oracle host routing / policy tables
     ↓
 AirVPN WireGuard (wg0)
     ↓
@@ -168,6 +168,10 @@ TS_EXTRA_ARGS=
 TS_TAILSCALED_EXTRA_ARGS=
 EOF
 sudo chmod 600 /opt/tailscale-stack/.env
+
+# Fill in the real auth key and a non-empty code-server password before startup.
+sudoedit /opt/tailscale-stack/.env
+sudo grep -Eq '^CODE_SERVER_PASSWORD=.+$' /opt/tailscale-stack/.env
 ```
 
 #### 4 — SSH-safe handoff to containerized Tailscale, then start it
@@ -207,16 +211,23 @@ Approve the exit-node advertisement in the Tailnet admin console.
 #### 5 — Restrict code-server port before startup
 
 Because both containers use host networking, code-server port 8080 binds on all
-host interfaces. Install the firewall guard before starting code-server:
+host interfaces. Install a persistent firewall guard before starting
+code-server:
 
 ```sh
+# Install persistent netfilter helpers once (Debian/Ubuntu example).
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent netfilter-persistent
+
 # Allow only connections arriving on tailscale0
 sudo iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
   || sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
 
-# Persist the rule (Ubuntu/ufw example):
-# sudo ufw allow in on tailscale0 to any port 8080
-# sudo ufw deny 8080   # deny from everywhere
+# Persist it before the first code-server start or reboot.
+sudo netfilter-persistent save
+sudo systemctl enable netfilter-persistent
+
+# Verify the DROP guard is present.
+sudo iptables -S INPUT | grep -- '--dport 8080'
 ```
 
 #### 6 — Start code-server
@@ -271,7 +282,37 @@ sudo iptables -C DOCKER-USER -o tailscale0 -j ACCEPT 2>/dev/null \
 
 Do **not** flush or overwrite existing WireGuard rules.
 
-#### 9 — Persistence test
+#### 9 — Install reboot-safe startup orchestration
+
+`depends_on: condition: service_healthy` only orders `docker compose up`.
+After a daemon or host reboot, start `tailscale` first and recreate
+`code-server` from the host once Tailscale is healthy:
+
+```sh
+sudo tee /etc/systemd/system/tailscale-stack.service <<'EOF'
+[Unit]
+Description=Start Oracle Tailscale stack in safe order
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/tailscale-stack
+ExecStart=/usr/bin/docker compose up -d tailscale
+ExecStart=/bin/sh -c 'until [ "$$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{end}}" tailscale 2>/dev/null)" = healthy ]; do sleep 2; done'
+ExecStart=/usr/bin/docker compose up -d --force-recreate code-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable tailscale-stack.service
+sudo systemctl start tailscale-stack.service
+```
+
+#### 10 — Persistence test
 
 ```sh
 # Restart Tailscale, then restart code-server so it rejoins the recreated
@@ -281,13 +322,14 @@ sudo docker compose up -d --force-recreate code-server
 sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
 
 # Full reboot test (confirm SSH safety first)
-# Containers auto-restart because restart: unless-stopped
+# tailscale-stack.service replays the safe startup order after Docker is ready
 sudo reboot
 ```
 
 After the host comes back up, reconnect over SSH, then run:
 
 ```sh
+sudo systemctl status tailscale-stack.service --no-pager
 cd /opt/tailscale-stack
 sudo docker compose ps   # wait until tailscale is healthy and code-server is running
 sudo docker exec code-server curl -4 https://ifconfig.me
