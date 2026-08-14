@@ -171,7 +171,8 @@ sudo chmod 600 /opt/tailscale-stack/.env
 
 # Fill in the real auth key and a non-empty code-server password before startup.
 sudoedit /opt/tailscale-stack/.env
-sudo grep -Eq '^CODE_SERVER_PASSWORD=.+$' /opt/tailscale-stack/.env
+sudo grep -Eq '^CODE_SERVER_PASSWORD=.+$' /opt/tailscale-stack/.env \
+  || { echo "ERROR: CODE_SERVER_PASSWORD is not set in .env"; exit 1; }
 ```
 
 #### 4 — SSH-safe handoff to containerized Tailscale, then start it
@@ -300,7 +301,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/tailscale-stack
 ExecStart=/usr/bin/docker compose up -d tailscale
-ExecStart=/bin/sh -c 'until [ "$$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{end}}" tailscale 2>/dev/null)" = healthy ]; do sleep 2; done'
+ExecStart=/bin/sh -c "until /usr/bin/docker inspect tailscale 2>/dev/null | grep -q '\"Status\": \"healthy\"'; do sleep 2; done"
 ExecStart=/usr/bin/docker compose up -d --force-recreate code-server
 
 [Install]
