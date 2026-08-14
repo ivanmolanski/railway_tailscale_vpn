@@ -5,9 +5,11 @@
 # This node is a CLIENT that egresses through a remote exit node (the Oracle
 # VPS AirVPN gateway), NOT an exit node itself. Set TAILSCALE_EXIT_NODE to the
 # exit node's Tailscale IP (e.g. 100.74.193.1) to route all container egress
-# through it. The SOCKS5 proxy on localhost:1055 is the standard userspace
-# outbound path for apps in this container (bound to localhost only).
-./tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock --tun=userspace-networking --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 &
+# through it. The SOCKS5/HTTP proxy is the standard userspace outbound path.
+# It is bound to 0.0.0.0:1055 so sibling Railway services (e.g. code-server)
+# can reach it over Railway's private network at
+# tailscale-vpn.railway.internal:1055 (WireGuard-encrypted, never public).
+./tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock --tun=userspace-networking --socks5-server=0.0.0.0:1055 --outbound-http-proxy-listen=0.0.0.0:1055 &
 # Bring the node up as a CLIENT:
 #   - Mention --advertise-exit-node=false EXPLICITLY: Tailscale refuses to
 #     change settings unless all non-default flags are stated. The old
