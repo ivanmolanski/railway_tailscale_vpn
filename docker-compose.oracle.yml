@@ -1,0 +1,117 @@
+# Oracle Native TUN Stack — Tailscale + code-server
+#
+# Deploy this file on the Oracle VPS host (NOT via Railway).
+# Railway cannot supply /dev/net/tun; this design requires real kernel networking.
+#
+# Prerequisites on the Oracle host:
+#   - Docker Engine installed (docker-ce + docker-compose-plugin)
+#   - /dev/net/tun exists
+#   - net.ipv4.ip_forward=1
+#   - AirVPN WireGuard already running (wg-quick@airvpn or similar)
+#   - Tailscale host daemon may be stopped/disabled if this container takes over
+#
+# Usage:
+#   Copy this file to /opt/tailscale-stack/docker-compose.yml on the Oracle host.
+#   Create /opt/tailscale-stack/.env with the required variables (see below).
+#   Run: docker compose up -d
+#
+# Required .env variables:
+#   TS_AUTHKEY=tskey-auth-...        # Tailscale pre-auth key (reusable)
+#   TS_HOSTNAME=oracle-ts            # Tailscale hostname for this node
+#
+# Optional .env variables:
+#   TS_EXTRA_ARGS=                   # Additional tailscale up / tailscaled args
+#   CODE_SERVER_PASSWORD=changeme    # code-server web UI password
+
+services:
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: ${TS_HOSTNAME:-oracle-ts}
+    restart: unless-stopped
+
+    # Kernel TUN networking — no userspace, no SOCKS, no HTTP proxy.
+    environment:
+      TS_USERSPACE: "false"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_HOSTNAME: ${TS_HOSTNAME:-oracle-ts}
+      # TS_EXTRA_ARGS may include e.g. --exit-node=<ip> after the exit node is
+      # discovered. See Phase 4 of the deployment guide in README.md.
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+
+    # Share the Oracle host network stack so Tailscale creates a real kernel
+    # tailscale0 interface visible to the host and all service:tailscale consumers.
+    network_mode: host
+
+    # Capabilities required for kernel TUN and routing table manipulation.
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    # Real /dev/net/tun — mandatory for TS_USERSPACE=false.
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    # Persist Tailscale node identity and state across container restarts/reboots.
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+
+    # Healthcheck: node is up when tailscale reports a Tailscale IP.
+    healthcheck:
+      test: ["CMD-SHELL", "tailscale ip 2>/dev/null | grep -q '^100\\.'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  code-server:
+    image: codercom/code-server:latest
+    container_name: code-server
+    restart: unless-stopped
+    user: "1000"
+
+    # Share the Tailscale container's network namespace.
+    # code-server sees tailscale0 and the same routing table as the Tailscale
+    # container. No separate Docker network. No proxy variables.
+    network_mode: "service:tailscale"
+
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD:?CODE_SERVER_PASSWORD must be set in .env}
+      # No ALL_PROXY, HTTP_PROXY, HTTPS_PROXY, or SOCKS variables.
+
+    volumes:
+      - code-server-data:/home/coder
+      - code-server-workspace:/home/coder/workspace
+
+    # Port 8080 is accessible via the tailscale0 interface (100.x.x.x:8080).
+    # Because network_mode is service:tailscale and tailscale uses network_mode: host,
+    # code-server's port 8080 also binds on the host's network interfaces.
+    # Restrict access with a firewall rule to prevent exposure on the public interface:
+    #   iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
+    # or use ufw/nftables equivalently.
+
+volumes:
+  tailscale-state:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/tailscale-stack/state
+  code-server-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/tailscale-stack/coder-home
+  code-server-workspace:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/tailscale-stack/workspace
