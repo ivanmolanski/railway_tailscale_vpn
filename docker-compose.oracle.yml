@@ -18,15 +18,15 @@
 # Required .env variables:
 #   TS_AUTHKEY=tskey-auth-...        # Tailscale pre-auth key (reusable)
 #   TS_HOSTNAME=oracle-ts            # Tailscale hostname for this node
+#   CODE_SERVER_PASSWORD=REPLACE_ME  # code-server web UI password
 #
 # Optional .env variables:
 #   TS_EXTRA_ARGS=                   # Additional tailscale up / tailscaled args
-#   CODE_SERVER_PASSWORD=changeme    # code-server web UI password
 
 services:
 
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.102.2@sha256:321ce041508c19079b57a28b6666c8d81ab0b08accc0a2585b3ab663d557ac24
     container_name: tailscale
     hostname: ${TS_HOSTNAME:-oracle-ts}
     restart: unless-stopped
@@ -35,7 +35,7 @@ services:
     environment:
       TS_USERSPACE: "false"
       TS_STATE_DIR: /var/lib/tailscale
-      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY must be set in .env}
       TS_HOSTNAME: ${TS_HOSTNAME:-oracle-ts}
       # TS_EXTRA_ARGS may include e.g. --exit-node=<ip> after the exit node is
       # discovered. See Phase 4 of the deployment guide in README.md.
@@ -45,10 +45,9 @@ services:
     # tailscale0 interface visible to the host and all service:tailscale consumers.
     network_mode: host
 
-    # Capabilities required for kernel TUN and routing table manipulation.
+    # Capability required for kernel TUN and routing table manipulation.
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
 
     # Real /dev/net/tun — mandatory for TS_USERSPACE=false.
     devices:
@@ -67,7 +66,7 @@ services:
       start_period: 30s
 
   code-server:
-    image: codercom/code-server:latest
+    image: codercom/code-server:4.132.0@sha256:b88ed46a6ace76a0294a17a24f39aa88032ed0a3692c3d8ab5433b47ab57ccbf
     container_name: code-server
     restart: unless-stopped
     user: "1000"
@@ -93,7 +92,7 @@ services:
     # Because network_mode is service:tailscale and tailscale uses network_mode: host,
     # code-server's port 8080 also binds on the host's network interfaces.
     # Restrict access with a firewall rule to prevent exposure on the public interface:
-    #   iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
+    #   sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
     # or use ufw/nftables equivalently.
 
 volumes:

@@ -133,10 +133,10 @@ Before starting any containers, save the current network state:
   echo "=== ip -6 route ===" && ip -6 route
   echo "=== ip -6 rule ===" && ip -6 rule
   echo "=== wg show ===" && wg show
-  echo "=== iptables-save ===" && iptables-save
-  echo "=== iptables mangle ===" && iptables -t mangle -S
-  echo "=== iptables nat ===" && iptables -t nat -S
-  echo "=== iptables filter ===" && iptables -S
+  echo "=== iptables-save ===" && sudo iptables-save
+  echo "=== iptables mangle ===" && sudo iptables -t mangle -S
+  echo "=== iptables nat ===" && sudo iptables -t nat -S
+  echo "=== iptables filter ===" && sudo iptables -S
   echo "=== tailscale status ===" && tailscale status
   echo "=== tailscale ip ===" && tailscale ip
   echo "=== systemctl tailscaled ===" && systemctl status tailscaled
@@ -214,12 +214,12 @@ host interfaces.  Lock it down immediately after starting the stack:
 
 ```sh
 # Allow only connections arriving on tailscale0
-iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
-  || iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
+sudo iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
+  || sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
 
 # Persist the rule (Ubuntu/ufw example):
-# ufw deny 8080   # deny from everywhere
-# ufw allow in on tailscale0 to any port 8080
+# sudo ufw deny 8080   # deny from everywhere
+# sudo ufw allow in on tailscale0 to any port 8080
 ```
 
 #### 6 — Verify end-to-end traffic from inside code-server
@@ -246,19 +246,19 @@ wg show                        # must show active handshake
 After Docker is running, inspect and protect the existing rules:
 
 ```sh
-iptables-save
-iptables -t nat -S
-iptables -t mangle -S
+sudo iptables-save
+sudo iptables -t nat -S
+sudo iptables -t mangle -S
 ```
 
 If Docker's `DOCKER-USER` chain needs to permit Tailscale traffic:
 
 ```sh
 # Allow traffic from/to tailscale0 in DOCKER-USER (idempotent)
-iptables -C DOCKER-USER -i tailscale0 -j ACCEPT 2>/dev/null \
-  || iptables -I DOCKER-USER -i tailscale0 -j ACCEPT
-iptables -C DOCKER-USER -o tailscale0 -j ACCEPT 2>/dev/null \
-  || iptables -I DOCKER-USER -o tailscale0 -j ACCEPT
+sudo iptables -C DOCKER-USER -i tailscale0 -j ACCEPT 2>/dev/null \
+  || sudo iptables -I DOCKER-USER -i tailscale0 -j ACCEPT
+sudo iptables -C DOCKER-USER -o tailscale0 -j ACCEPT 2>/dev/null \
+  || sudo iptables -I DOCKER-USER -o tailscale0 -j ACCEPT
 ```
 
 Do **not** flush or overwrite existing WireGuard rules.
