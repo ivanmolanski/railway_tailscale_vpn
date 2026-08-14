@@ -13,11 +13,16 @@
 # Usage:
 #   Copy this file to /opt/tailscale-stack/docker-compose.yml on the Oracle host.
 #   Create /opt/tailscale-stack/.env with the required variables (see below).
+#   Fill in a real CODE_SERVER_PASSWORD before startup.
 #   Run (safe order):
 #     docker compose up -d tailscale
+#     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent netfilter-persistent
 #     sudo iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
 #       || sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
+#     sudo netfilter-persistent save && sudo systemctl enable netfilter-persistent
 #     docker compose up -d code-server
+#   For reboot-safe startup, use a host systemd unit to start tailscale first,
+#   then recreate code-server after tailscale is healthy (see README.md).
 #
 # Required .env variables:
 #   TS_AUTHKEY=tskey-auth-...        # Tailscale pre-auth key (reusable)
@@ -74,7 +79,9 @@ services:
   code-server:
     image: codercom/code-server:4.132.0-debian@sha256:b88ed46a6ace76a0294a17a24f39aa88032ed0a3692c3d8ab5433b47ab57ccbf
     container_name: code-server
-    restart: unless-stopped
+    # Do not rely on Docker restart ordering after reboot; recreate this service
+    # from host boot orchestration after tailscale is healthy.
+    restart: "no"
     user: "1000:1000"
 
     # Share the Tailscale container's network namespace.
@@ -82,6 +89,8 @@ services:
     # container. No separate Docker network. No proxy variables.
     network_mode: "service:tailscale"
 
+    # This only affects `docker compose up`; host boot orchestration must
+    # recreate code-server after tailscale becomes healthy.
     depends_on:
       tailscale:
         condition: service_healthy
@@ -97,9 +106,10 @@ services:
     # Port 8080 is accessible via the tailscale0 interface (100.x.x.x:8080).
     # Because network_mode is service:tailscale and tailscale uses network_mode: host,
     # code-server's port 8080 also binds on the host's network interfaces.
-    # Restrict access with a firewall rule to prevent exposure on the public interface:
+    # Restrict access with a persistent host firewall rule before first start:
     #   sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
-    # or use ufw/nftables equivalently.
+    #   sudo netfilter-persistent save
+    # or use persistent ufw/nftables rules equivalently.
 
 volumes:
   tailscale-state:
