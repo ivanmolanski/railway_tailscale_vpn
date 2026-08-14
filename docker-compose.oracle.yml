@@ -13,15 +13,20 @@
 # Usage:
 #   Copy this file to /opt/tailscale-stack/docker-compose.yml on the Oracle host.
 #   Create /opt/tailscale-stack/.env with the required variables (see below).
-#   Run: docker compose up -d
+#   Run (safe order):
+#     docker compose up -d tailscale
+#     sudo iptables -C INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP 2>/dev/null \
+#       || sudo iptables -I INPUT -p tcp --dport 8080 ! -i tailscale0 -j DROP
+#     docker compose up -d code-server
 #
 # Required .env variables:
 #   TS_AUTHKEY=tskey-auth-...        # Tailscale pre-auth key (reusable)
 #   TS_HOSTNAME=oracle-ts            # Tailscale hostname for this node
-#   CODE_SERVER_PASSWORD=REPLACE_ME  # code-server web UI password
+#   CODE_SERVER_PASSWORD=            # code-server web UI password (required)
 #
 # Optional .env variables:
-#   TS_EXTRA_ARGS=                   # Additional tailscale up / tailscaled args
+#   TS_EXTRA_ARGS=                   # Additional tailscale up / tailscale set args
+#   TS_TAILSCALED_EXTRA_ARGS=        # Optional tailscaled daemon args
 
 services:
 
@@ -37,9 +42,10 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY must be set in .env}
       TS_HOSTNAME: ${TS_HOSTNAME:-oracle-ts}
-      # TS_EXTRA_ARGS may include e.g. --exit-node=<ip> after the exit node is
-      # discovered. See Phase 4 of the deployment guide in README.md.
+      # TS_EXTRA_ARGS may include e.g. --advertise-exit-node.
+      # Use TS_TAILSCALED_EXTRA_ARGS for tailscaled daemon flags.
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+      TS_TAILSCALED_EXTRA_ARGS: ${TS_TAILSCALED_EXTRA_ARGS:-}
 
     # Share the Oracle host network stack so Tailscale creates a real kernel
     # tailscale0 interface visible to the host and all service:tailscale consumers.
