@@ -25,7 +25,7 @@
 #   then recreate code-server after tailscale is healthy (see README.md).
 #
 # Required .env variables:
-#   TS_AUTHKEY=tskey-auth-...        # Tailscale pre-auth key (reusable)
+#   TS_AUTHKEY=tskey-auth-...        # Tailscale one-off pre-auth key (safe with TS_AUTH_ONCE=true)
 #   TS_HOSTNAME=oracle-ts            # Tailscale hostname for this node
 #   CODE_SERVER_PASSWORD=            # code-server web UI password (required)
 #
@@ -46,6 +46,10 @@ services:
       TS_USERSPACE: "false"
       TS_STATE_DIR: /var/lib/tailscale
       TS_AUTHKEY: ${TS_AUTHKEY:?TS_AUTHKEY must be set in .env}
+      # Authenticate only when not already logged in. This reuses the persisted
+      # node state across restarts, so a one-off key can be used safely and the
+      # enrollment credential is not retained beyond the first login.
+      TS_AUTH_ONCE: "true"
       TS_HOSTNAME: ${TS_HOSTNAME:-oracle-ts}
       # TS_EXTRA_ARGS may include e.g. --advertise-exit-node.
       # Use TS_TAILSCALED_EXTRA_ARGS for tailscaled daemon flags.
@@ -79,8 +83,11 @@ services:
   code-server:
     image: codercom/code-server:4.132.0-debian@sha256:b88ed46a6ace76a0294a17a24f39aa88032ed0a3692c3d8ab5433b47ab57ccbf
     container_name: code-server
-    # Do not rely on Docker restart ordering after reboot; recreate this service
-    # from host boot orchestration after tailscale is healthy.
+    # No Docker restart policy: a restart would rejoin a stale network namespace
+    # when tailscale has been recreated. Runtime recovery is handled by the host
+    # `tailscale-stack-recover.timer` (see README.md), which force-recreates
+    # code-server whenever tailscale is healthy and code-server is down or its
+    # shared network namespace has gone stale.
     restart: "no"
     user: "1000:1000"
 
