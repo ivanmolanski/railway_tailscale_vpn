@@ -159,6 +159,10 @@ sudo cp docker-compose.oracle.yml /opt/tailscale-stack/docker-compose.yml
 
 # Create the .env file
 sudo tee /opt/tailscale-stack/.env <<'EOF'
+# Use a ONE-OFF pre-auth key (generate with "Ephemeral" unticked and the key
+# marked as one-time-use). TS_AUTH_ONCE=true in the Compose file reuses the
+# persisted node state on restart, so the key is only consumed once. A reusable
+# key would let an .env leak enroll additional nodes until the key expires.
 TS_AUTHKEY=tskey-auth-REPLACE_ME
 TS_HOSTNAME=oracle-ts
 CODE_SERVER_PASSWORD=
@@ -254,6 +258,37 @@ sudo docker exec code-server curl -4 https://api.ipify.org
 
 All three `curl` results must return the current **AirVPN public IPv4**.
 
+**IPv6 egress must also be verified.** On an IPv6-enabled Oracle host,
+`curl` (and code-server) may prefer IPv6 and bypass AirVPN over the host's
+public IPv6 route even when IPv4 is correctly routed. Confirm AirVPN routes
+IPv6 as well — if it does not, block or disable non-VPN IPv6 egress before
+declaring success:
+
+```sh
+# Must return the AirVPN IPv6 (or fail/empty if AirVPN is IPv4-only)
+sudo docker exec code-server curl -6 https://ifconfig.me
+sudo docker exec code-server curl -6 https://api.ipify.org
+```
+
+If the IPv6 result is **not** an AirVPN egress address (e.g. it returns the
+Oracle host's public IPv6, or times out while the host has a public IPv6 route),
+AirVPN is not routing `::/0`. In that case disable IPv6 on the shared network
+path so code-server cannot leak traffic outside the VPN:
+
+```sh
+# Disable IPv6 on the shared namespace so non-VPN IPv6 cannot bypass AirVPN.
+sudo docker exec tailscale sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sudo docker exec tailscale sysctl -w net.ipv6.conf.default.disable_ipv6=1
+# Persist the setting for reboots (systemd-sysctl):
+echo 'net.ipv6.conf.all.disable_ipv6=1' | sudo tee /etc/sysctl.d/90-disable-ipv6-leak.conf
+echo 'net.ipv6.conf.default.disable_ipv6=1' | sudo tee -a /etc/sysctl.d/90-disable-ipv6-leak.conf
+sudo sysctl --system
+```
+
+Re-run the `curl -6` checks after applying one of the above. The deployment is
+only complete when **both** IPv4 and IPv6 egress from code-server resolve to
+AirVPN addresses, or IPv6 is explicitly disabled so no non-VPN IPv6 route exists.
+
 Also verify Oracle's own AirVPN path is intact:
 
 ```sh
@@ -297,6 +332,12 @@ After=docker.socket
 After=docker.service
 Wants=docker.socket
 Requires=docker.service
+# Propagate Docker restarts to this unit. `Requires=` stops this unit when
+# Docker is explicitly stopped, but restarting Docker does not pull an
+# already-stopped dependent unit back in. `PartOf=` makes `systemctl restart
+# docker` (and Docker's own restart) also restart this unit, so code-server
+# (which has no restart policy) comes back up with a fresh network namespace.
+PartOf=docker.service
 
 [Service]
 Type=oneshot
@@ -314,11 +355,55 @@ sudo systemctl enable tailscale-stack.service
 sudo systemctl start tailscale-stack.service
 ```
 
+The boot unit above only runs once at startup. Because `code-server` has
+`restart: "no"`, a crash after boot leaves the service down. Add a supervised
+runtime recovery mechanism — a health-aware systemd timer — that force-recreates
+`code-server` whenever Tailscale is healthy but code-server is not running (or
+its shared network namespace has gone stale):
+
+```sh
+sudo tee /etc/systemd/system/tailscale-stack-recover.service <<'EOF'
+[Unit]
+Description=Recreate code-server if Tailscale is healthy but code-server is down
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tailscale-stack
+# Only act when tailscale is healthy and code-server is missing or its netns is stale.
+ExecStart=/bin/sh -c 'set -e; ts="$$(/usr/bin/docker inspect --format={{.State.Health.Status}} tailscale 2>/dev/null || true)"; [ "$$ts" = healthy ] || exit 0; if /usr/bin/docker inspect --format={{.State.Running}} code-server 2>/dev/null | grep -q true; then exit 0; fi; /usr/bin/docker compose up -d --force-recreate code-server'
+EOF
+
+sudo tee /etc/systemd/system/tailscale-stack-recover.timer <<'EOF'
+[Unit]
+Description=Run code-server runtime recovery check periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+Unit=tailscale-stack-recover.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now tailscale-stack-recover.timer
+```
+
+The timer runs the recovery service every minute once the boot unit has
+finished. If `tailscale` becomes healthy and `code-server` is down (crash,
+manual stop, or a stale namespace after `docker compose restart tailscale`),
+it force-recreates `code-server` automatically.
+
 #### 10 — Persistence test
 
 ```sh
-# Restart Tailscale, then restart code-server so it rejoins the recreated
-# network namespace.
+# Restart Tailscale. code-server's network namespace becomes stale, so the
+# recovery timer force-recreates it automatically once tailscale is healthy.
+# To recover immediately instead of waiting for the timer:
 sudo docker compose restart tailscale
 sudo docker compose up -d --force-recreate code-server
 sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
@@ -332,6 +417,7 @@ After the host comes back up, reconnect over SSH, then run:
 
 ```sh
 sudo systemctl status tailscale-stack.service --no-pager
+systemctl status tailscale-stack-recover.timer --no-pager
 cd /opt/tailscale-stack
 sudo docker compose ps   # wait until tailscale is healthy and code-server is running
 sudo docker exec code-server curl -4 https://ifconfig.me
@@ -345,7 +431,8 @@ The deployment is successful **only when**:
 ACTUAL CODE-SERVER PUBLIC IP == ACTUAL AIRVPN PUBLIC IP
 ```
 
-with:
+for **both** address families (or IPv6 is explicitly disabled as described in
+step 7), with:
 - **NO** SOCKS proxy
 - **NO** HTTP/HTTPS proxy
 - **REAL** `/dev/net/tun` TUN interface
