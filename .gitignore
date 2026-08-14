@@ -1,0 +1,20 @@
+# --- Secrets / credentials (NEVER commit) ---
+# Oracle Cloud / OCI API keys
+*.pem
+# WireGuard / VPN private configs
+*.conf
+# Private keys
+*.key
+*.p12
+*.pfx
+# Tailscale auth keys
+*tskey*
+# Console / shell history logs that may contain secrets
+console-history-*.log
+# OCI key material
+oci_public_key.pem
+oci_api_key.pem
+# Local env files
+.env
+.env.*
+!.env.example
