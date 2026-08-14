@@ -301,7 +301,7 @@ Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=180
 WorkingDirectory=/opt/tailscale-stack
-ExecStart=/bin/sh -c "/usr/bin/docker compose up -d tailscale && until [ \"$$(/usr/bin/docker inspect --format='{{.State.Health.Status}}' tailscale 2>/dev/null)\" = healthy ]; do sleep 2; done && /usr/bin/docker compose up -d --force-recreate code-server"
+ExecStart=/bin/sh -c "set -e; /usr/bin/docker compose up -d tailscale; i=0; until [ \"$$(/usr/bin/docker inspect --format='{{.State.Health.Status}}' tailscale 2>/dev/null)\" = healthy ]; do i=$$((i+1)); if [ $$i -ge 90 ]; then echo 'tailscale did not become healthy within 180 seconds' >&2; exit 1; fi; sleep 2; done; /usr/bin/docker compose up -d --force-recreate code-server"
 
 [Install]
 WantedBy=multi-user.target
