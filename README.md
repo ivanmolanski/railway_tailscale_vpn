@@ -300,9 +300,7 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/tailscale-stack
-ExecStart=/usr/bin/docker compose up -d tailscale
-ExecStart=/bin/sh -c "until /usr/bin/docker inspect tailscale 2>/dev/null | grep -q '\"Status\": \"healthy\"'; do sleep 2; done"
-ExecStart=/usr/bin/docker compose up -d --force-recreate code-server
+ExecStart=/bin/sh -c "/usr/bin/docker compose up -d tailscale && until /usr/bin/docker inspect tailscale 2>/dev/null | grep -q '\"Status\": \"healthy\"'; do sleep 2; done && /usr/bin/docker compose up -d --force-recreate code-server"
 
 [Install]
 WantedBy=multi-user.target
