@@ -275,7 +275,7 @@ sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
 # Full reboot test (confirm SSH safety first)
 # Containers auto-restart because restart: unless-stopped
 sudo reboot
-# After reboot:
+# After the host comes back up, reconnect over SSH, then run:
 cd /opt/tailscale-stack
 sudo docker compose ps   # wait until tailscale is healthy and code-server is running
 sudo docker exec code-server curl -4 https://ifconfig.me
