@@ -266,11 +266,9 @@ Do **not** flush or overwrite existing WireGuard rules.
 #### 8 — Persistence test
 
 ```sh
-# Restart Tailscale container; code-server should reconnect
+# Restart Tailscale, then restart code-server so it rejoins the recreated
+# network namespace.
 sudo docker compose restart tailscale
-sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
-
-# Restart code-server
 sudo docker compose restart code-server
 sudo docker exec code-server curl -4 https://ifconfig.me  # still AirVPN IP
 
